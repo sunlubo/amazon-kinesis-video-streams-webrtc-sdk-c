@@ -52,7 +52,9 @@ typedef struct {
     MUTEX pSrtpSessionLock;
     PSrtpSession pSrtpSession;
 
+#if ENABLE_DATA_CHANNEL
     PSctpSession pSctpSession;
+#endif
 
     SessionDescription remoteSessionDescription;
     PDoubleList pTransceivers;
@@ -86,8 +88,10 @@ typedef struct {
     // DataChannels keyed by streamId
     PHashTable pDataChannels;
 
+#if ENABLE_DATA_CHANNEL
     UINT64 onDataChannelCustomData;
     RtcOnDataChannel onDataChannel;
+#endif
 
     UINT64 onIceCandidateCustomData;
     RtcOnIceCandidate onIceCandidate;
@@ -101,11 +105,13 @@ typedef struct {
     NullableBool canTrickleIce;
 } KvsPeerConnection, *PKvsPeerConnection;
 
+#if ENABLE_DATA_CHANNEL
 typedef struct {
     UINT32 currentDataChannelId;
     PKvsPeerConnection pKvsPeerConnection;
     PHashTable unkeyedDataChannels;
 } AllocateSctpSortDataChannelsData, *PAllocateSctpSortDataChannelsData;
+#endif
 
 STATUS onFrameReadyFunc(UINT64, UINT16, UINT16, UINT32);
 STATUS onFrameDroppedFunc(UINT64, UINT16, UINT16, UINT32);

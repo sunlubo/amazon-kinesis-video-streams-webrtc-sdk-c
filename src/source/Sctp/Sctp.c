@@ -1,3 +1,4 @@
+#if ENABLE_DATA_CHANNEL
 #define LOG_CLASS "SCTP"
 #include "../Include_i.h"
 
@@ -363,3 +364,4 @@ CleanUp:
 
     return 1;
 }
+#endif
