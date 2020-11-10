@@ -9,3 +9,5 @@ doc/
 open-source/
 outputs
 tags
+build.sh
+output/

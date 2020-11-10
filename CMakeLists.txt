@@ -149,6 +149,12 @@ endif()
 
 ############# find dependent libraries ############
 
+set(CMAKE_PREFIX_PATH ${CMAKE_PREFIX_PATH} $ENV{WK_SRTP_PATH})
+set(CMAKE_PREFIX_PATH ${CMAKE_PREFIX_PATH} $ENV{WK_USRSCTP_PATH})
+set(OPEN_SRC_INCLUDE_DIRS ${OPEN_SRC_INCLUDE_DIRS} "$ENV{WK_AWS_PRODUCER_PATH}/include")
+set(OPEN_SRC_INCLUDE_DIRS ${OPEN_SRC_INCLUDE_DIRS} "$ENV{WK_SRTP_PATH}/include")
+set(OPEN_SRC_INCLUDE_DIRS ${OPEN_SRC_INCLUDE_DIRS} "$ENV{WK_USRSCTP_PATH}/include")
+
 find_package(Threads)
 find_package(PkgConfig REQUIRED)
 if (USE_OPENSSL)
@@ -174,11 +180,11 @@ else()
   endif()
 endif()
 
-if (WIN32)
-  SET(LIBWEBSOCKETS_LIBRARIES "websockets.lib")
-else()
-  pkg_check_modules(LIBWEBSOCKETS REQUIRED libwebsockets)
-endif()
+# if (WIN32)
+#   SET(LIBWEBSOCKETS_LIBRARIES "websockets.lib")
+# else()
+#   pkg_check_modules(LIBWEBSOCKETS REQUIRED libwebsockets)
+# endif()
 
 # usrsctp dont support pkgconfig yet
 find_library(
@@ -310,22 +316,22 @@ target_link_libraries(
           ${GPERFTOOLS_PROFILER_LIBRARIES}
           ${EXTRA_DEPS})
 
-add_library(kvsWebrtcSignalingClient ${LINKAGE} ${WEBRTC_SIGNALING_CLIENT_SOURCE_FILES})
+# add_library(kvsWebrtcSignalingClient ${LINKAGE} ${WEBRTC_SIGNALING_CLIENT_SOURCE_FILES})
 
-target_link_libraries(
-  kvsWebrtcSignalingClient
-  PUBLIC
-        kvsCommonLws
-        ${LIBWEBSOCKETS_LIBRARIES} 
-  PRIVATE kvspicUtils
-         kvspicState
-         ${CMAKE_THREAD_LIBS_INIT}
-         ${EXTRA_DEPS}
-         ${OPENSSL_SSL_LIBRARY}
-         ${OPENSSL_CRYPTO_LIBRARY}
-         ${GPERFTOOLS_MALLOC_LIBRARIES}
-         ${GPERFTOOLS_PROFILER_LIBRARIES}
-         ${MBEDTLS_LIBRARIES})
+# target_link_libraries(
+#   kvsWebrtcSignalingClient
+#   PUBLIC
+#         kvsCommonLws
+#         ${LIBWEBSOCKETS_LIBRARIES} 
+#   PRIVATE kvspicUtils
+#          kvspicState
+#          ${CMAKE_THREAD_LIBS_INIT}
+#          ${EXTRA_DEPS}
+#          ${OPENSSL_SSL_LIBRARY}
+#          ${OPENSSL_CRYPTO_LIBRARY}
+#          ${GPERFTOOLS_MALLOC_LIBRARIES}
+#          ${GPERFTOOLS_PROFILER_LIBRARIES}
+#          ${MBEDTLS_LIBRARIES})
 
 if (WIN32)
   target_link_libraries(kvsWebrtcClient PRIVATE "Ws2_32" "iphlpapi")
@@ -333,10 +339,10 @@ endif()
 
 if(COMPILER_WARNINGS)
   target_compile_options(kvsWebrtcClient PUBLIC -Wall -Werror -pedantic -Wextra -Wno-unknown-warning-option)
-  target_compile_options(kvsWebrtcSignalingClient PUBLIC -Wall -Werror -pedantic -Wextra -Wno-unknown-warning-option)
+  # target_compile_options(kvsWebrtcSignalingClient PUBLIC -Wall -Werror -pedantic -Wextra -Wno-unknown-warning-option)
 endif()
 
-install(TARGETS kvsWebrtcClient kvsWebrtcSignalingClient
+install(TARGETS kvsWebrtcClient # kvsWebrtcSignalingClient
   LIBRARY DESTINATION lib
   ARCHIVE DESTINATION lib
 )
