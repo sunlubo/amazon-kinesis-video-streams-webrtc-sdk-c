@@ -149,6 +149,7 @@ VOID onInboundPacket(UINT64 customData, PBYTE buff, UINT32 buffLen)
                 CHK_STATUS(allocateSctp(pKvsPeerConnection));
             }
 #endif
+            changePeerConnectionState(pKvsPeerConnection, RTC_PEER_CONNECTION_STATE_CONNECTED);
         }
 
     } else if ((buff[0] > 127 && buff[0] < 192) && (pKvsPeerConnection->pSrtpSession != NULL)) {
@@ -256,6 +257,8 @@ STATUS changePeerConnectionState(PKvsPeerConnection pKvsPeerConnection, RTC_PEER
 {
     STATUS retStatus = STATUS_SUCCESS;
     BOOL locked = FALSE;
+    RtcOnConnectionStateChange onConnectionStateChange = NULL;
+    UINT64 customData = 0;
     CHK(pKvsPeerConnection != NULL, STATUS_NULL_ARG);
 
     MUTEX_LOCK(pKvsPeerConnection->peerConnectionObjLock);
@@ -267,11 +270,13 @@ STATUS changePeerConnectionState(PKvsPeerConnection pKvsPeerConnection, RTC_PEER
         retStatus);
 
     pKvsPeerConnection->connectionState = newState;
+    onConnectionStateChange = pKvsPeerConnection->onConnectionStateChange;
+    customData = pKvsPeerConnection->onConnectionStateChangeCustomData;
     MUTEX_UNLOCK(pKvsPeerConnection->peerConnectionObjLock);
     locked = FALSE;
 
-    if (pKvsPeerConnection->onConnectionStateChange != NULL) {
-        pKvsPeerConnection->onConnectionStateChange(pKvsPeerConnection->onConnectionStateChangeCustomData, newState);
+    if (onConnectionStateChange != NULL) {
+        onConnectionStateChange(customData, newState);
     }
 
 CleanUp:
@@ -374,7 +379,7 @@ VOID onIceConnectionStateChange(UINT64 customData, UINT64 connectionState)
     STATUS retStatus = STATUS_SUCCESS;
     PKvsPeerConnection pKvsPeerConnection = (PKvsPeerConnection) customData;
     RTC_PEER_CONNECTION_STATE newConnectionState = RTC_PEER_CONNECTION_STATE_NEW;
-    BOOL startDtlsSession = FALSE;
+    BOOL startDtlsSession = FALSE, dtlsConnected;
 
     CHK(pKvsPeerConnection != NULL, STATUS_NULL_ARG);
 
@@ -394,7 +399,6 @@ VOID onIceConnectionStateChange(UINT64 customData, UINT64 connectionState)
         case ICE_AGENT_STATE_READY:
             /* start dtlsSession as soon as ice is connected */
             startDtlsSession = TRUE;
-            newConnectionState = RTC_PEER_CONNECTION_STATE_CONNECTED;
             break;
 
         case ICE_AGENT_STATE_DISCONNECTED:
@@ -411,7 +415,19 @@ VOID onIceConnectionStateChange(UINT64 customData, UINT64 connectionState)
     }
 
     if (startDtlsSession) {
-        CHK_STATUS(dtlsSessionStart(pKvsPeerConnection->pDtlsSession, pKvsPeerConnection->dtlsIsServer));
+        CHK_STATUS(dtlsSessionIsInitFinished(pKvsPeerConnection->pDtlsSession, &dtlsConnected));
+
+        if (dtlsConnected) {
+            // In ICE restart scenario, DTLS handshake is not going to be reset. Therefore, we need to check
+            // if the DTLS state has been connected.
+            newConnectionState = RTC_PEER_CONNECTION_STATE_CONNECTED;
+        } else {
+            // PeerConnection's state changes to CONNECTED only when DTLS state is also connected. So, we need
+            // wait until DTLS state changes to CONNECTED.
+            //
+            // Reference: https://w3c.github.io/webrtc-pc/#rtcpeerconnectionstate-enum
+            CHK_STATUS(dtlsSessionStart(pKvsPeerConnection->pDtlsSession, pKvsPeerConnection->dtlsIsServer));
+        }
     }
 
     CHK_STATUS(changePeerConnectionState(pKvsPeerConnection, newConnectionState));
@@ -552,8 +568,13 @@ VOID onDtlsStateChange(UINT64 customData, RTC_DTLS_TRANSPORT_STATE newDtlsState)
 
     pKvsPeerConnection = (PKvsPeerConnection) customData;
 
-    if (newDtlsState == CLOSED) {
-        changePeerConnectionState(pKvsPeerConnection, RTC_PEER_CONNECTION_STATE_CLOSED);
+    switch (newDtlsState) {
+        case RTC_DTLS_TRANSPORT_STATE_CLOSED:
+            changePeerConnectionState(pKvsPeerConnection, RTC_PEER_CONNECTION_STATE_CLOSED);
+            break;
+        default:
+            /* explicit ignore */
+            break;
     }
 }
 
@@ -933,6 +954,22 @@ CleanUp:
     return retStatus;
 }
 
+/**
+ *  @brief parses string of form "$number $whatever" returns $number as uint32
+ *  @return 0 if value is not parsable or null
+ */
+UINT32 parseExtId(PCHAR extmapValue)
+{
+    UINT32 extid = 0;
+    if (extmapValue == NULL && STRCHR(extmapValue, ' ') == NULL) {
+        return 0;
+    }
+    if (STATUS_FAILED(STRTOUI32(extmapValue, STRCHR(extmapValue, ' '), 10, &extid))) {
+        return 0;
+    }
+    return extid;
+}
+
 STATUS setRemoteDescription(PRtcPeerConnection pPeerConnection, PRtcSessionDescriptionInit pSessionDescriptionInit)
 {
     ENTERS();
@@ -991,6 +1028,9 @@ STATUS setRemoteDescription(PRtcPeerConnection pPeerConnection, PRtcSessionDescr
                 NULLABLE_SET_VALUE(pKvsPeerConnection->canTrickleIce, TRUE);
                 // This code is only here because Chrome does NOT adhere to the standard and adds ice-options as a media level attribute
                 // The standard dictates clearly that it should be a session level attribute:  https://tools.ietf.org/html/rfc5245#page-76
+            } else if (STRCMP(pSessionDescription->mediaDescriptions[i].sdpAttributes[j].attributeName, "extmap") == 0 &&
+                       STRSTR(pSessionDescription->mediaDescriptions[i].sdpAttributes[j].attributeValue, TWCC_EXT_URL) != NULL) {
+                pKvsPeerConnection->twccExtId = parseExtId(pSessionDescription->mediaDescriptions[i].sdpAttributes[j].attributeValue);
             }
         }
     }
@@ -1019,7 +1059,7 @@ STATUS setRemoteDescription(PRtcPeerConnection pPeerConnection, PRtcSessionDescr
     CHK_STATUS(setTransceiverPayloadTypes(pKvsPeerConnection->pCodecTable, pKvsPeerConnection->pRtxTable, pKvsPeerConnection->pTransceivers));
     CHK_STATUS(setReceiversSsrc(pSessionDescription, pKvsPeerConnection->pTransceivers));
 
-    if (NULL != getenv(DEBUG_LOG_SDP)) {
+    if (NULL != GETENV(DEBUG_LOG_SDP)) {
         DLOGD("REMOTE_SDP:%s\n", pSessionDescriptionInit->sdp);
     }
 
@@ -1056,6 +1096,10 @@ STATUS createOffer(PRtcPeerConnection pPeerConnection, PRtcSessionDescriptionIni
 
     CHK_STATUS(serializeSessionDescription(pSessionDescription, pSessionDescriptionInit->sdp, &serializeLen));
 
+    // If embedded SDK acts as the viewer
+    if (NULL != GETENV(DEBUG_LOG_SDP)) {
+        DLOGD("LOCAL_SDP:%s", pSessionDescriptionInit->sdp);
+    }
 CleanUp:
 
     SAFE_MEMFREE(pSessionDescription);
@@ -1078,6 +1122,10 @@ STATUS createAnswer(PRtcPeerConnection pPeerConnection, PRtcSessionDescriptionIn
 
     CHK_STATUS(peerConnectionGetCurrentLocalDescription(pPeerConnection, pSessionDescriptionInit));
 
+    // If embedded SDK acts as the master
+    if (NULL != GETENV(DEBUG_LOG_SDP)) {
+        DLOGD("LOCAL_SDP:%s", pSessionDescriptionInit->sdp);
+    }
 CleanUp:
 
     LEAVES();
@@ -1094,10 +1142,6 @@ STATUS setLocalDescription(PRtcPeerConnection pPeerConnection, PRtcSessionDescri
     CHK(pKvsPeerConnection != NULL && pSessionDescriptionInit != NULL, STATUS_NULL_ARG);
 
     CHK_STATUS(iceAgentStartGathering(pKvsPeerConnection->pIceAgent));
-
-    if (NULL != getenv(DEBUG_LOG_SDP)) {
-        DLOGD("LOCAL_SDP:%s", pSessionDescriptionInit->sdp);
-    }
 CleanUp:
 
     LEAVES();
